@@ -25,3 +25,16 @@ firestore-backup.rules
 firestore-before-update.rules
 public/*backup*
 public/*before*
+
+# Firebase Admin credentials
+serviceAccountKey.json
+*service-account*.json
+*firebase-admin*.json
+.env
+.env.*
+
+# Local Firebase credentials
+scripts/*.json
+
+# Local backups
+backups/
