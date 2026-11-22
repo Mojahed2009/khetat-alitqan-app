@@ -1,0 +1,47 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signed() { return request.auth != null; }
+    function isAdmin() {
+      return signed() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    function isTeacher() {
+      return signed() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'teacher';
+    }
+    function studentFieldsValid(d) {
+      return d.keys().hasOnly(['name','teacherId','records','createdAt']) &&
+        d.keys().hasAll(['name','teacherId','records','createdAt']) &&
+        d.name is string && d.name.size() > 0 && d.name.size() <= 120 &&
+        d.teacherId is string && d.records is list && d.records.size() <= 500;
+    }
+    match /users/{uid} {
+      allow get: if signed() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin() && request.resource.data.uid == uid &&
+        request.resource.data.role in ['admin','teacher'] &&
+        request.resource.data.keys().hasOnly(['uid','name','email','role','createdAt']) &&
+        request.resource.data.name is string &&
+        request.resource.data.email is string;
+      allow update, delete: if false;
+    }
+    match /students/{studentId} {
+      allow get, list: if isAdmin() ||
+        (isTeacher() && resource.data.teacherId == request.auth.uid);
+      allow create: if (isAdmin() || (isTeacher() &&
+        request.resource.data.teacherId == request.auth.uid)) &&
+        studentFieldsValid(request.resource.data) &&
+        request.resource.data.records.size() == 0 &&
+        exists(/databases/$(database)/documents/users/$(request.resource.data.teacherId)) &&
+        get(/databases/$(database)/documents/users/$(request.resource.data.teacherId)).data.role == 'teacher';
+      allow update: if (isAdmin() || (isTeacher() &&
+        resource.data.teacherId == request.auth.uid)) &&
+        request.resource.data.teacherId == resource.data.teacherId &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        studentFieldsValid(request.resource.data);
+      allow delete: if isAdmin() ||
+        (isTeacher() && resource.data.teacherId == request.auth.uid);
+    }
+  }
+}
