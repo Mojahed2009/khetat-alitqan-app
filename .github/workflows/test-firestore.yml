@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - 'firestore.rules'
+      - 'scripts/test-firestore.cjs'
       - '.github/workflows/test-firestore.yml'
 jobs:
   test:

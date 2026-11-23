@@ -6,7 +6,7 @@ const {
   assertFails
 } = require('@firebase/rules-unit-testing');
 const {
-  doc, getDoc, updateDoc, collection, getDocs
+  doc, getDoc, updateDoc, collection, getDocs, writeBatch, setDoc
 } = require('firebase/firestore');
 
 (async () => {
@@ -85,6 +85,54 @@ const {
       ))
     );
     console.log('PASS: Unrelated account cannot read record');
+
+    // STUDENT_ACCOUNT_LINK_TEST_V1
+    // Simulate a teacher linking a new Auth UID to an existing student.
+    const newStudentId = 'unlinked-student';
+    const newStudentUid = 'new-student-auth-uid';
+    const newStudentNumber = '12345678';
+    const newStudentEmail = 'student-' + newStudentNumber + '@khetat-alitqan.firebaseapp.com';
+    await env.withSecurityRulesDisabled(async ctx => {
+      await ctx.firestore().collection('students').doc(newStudentId).set({
+        name: 'Unlinked Student', teacherId: teacher,
+        records: [], createdAt: new Date()
+      });
+    });
+    const linkBatch = writeBatch(teacherDb);
+    linkBatch.update(doc(teacherDb, 'students', newStudentId), { accountUid: newStudentUid });
+    linkBatch.set(doc(teacherDb, 'users', newStudentUid), {
+      uid: newStudentUid, name: 'Unlinked Student',
+      email: newStudentEmail, role: 'student',
+      studentId: newStudentId, studentNumber: newStudentNumber,
+      createdAt: new Date()
+    });
+    await assertSucceeds(linkBatch.commit());
+    console.log('PASS: Teacher can atomically create and link student account');
+
+    const linkedStudentDb = env.authenticatedContext(newStudentUid).firestore();
+    await assertSucceeds(getDoc(doc(linkedStudentDb, 'students', newStudentId)));
+    await assertFails(getDoc(doc(linkedStudentDb, 'students', ownRecord)));
+    await assertFails(updateDoc(doc(linkedStudentDb, 'students', newStudentId), {name: 'Hacked'}));
+    console.log('PASS: Linked student can only read their own record');
+
+    // Another teacher must not claim the first teacher's student.
+    const attackerUid = 'attacker-teacher';
+    await env.withSecurityRulesDisabled(async ctx => {
+      await ctx.firestore().collection('users').doc(attackerUid).set({
+        uid: attackerUid, name: 'Attacker', role: 'teacher', email: 'attacker@test.invalid'
+      });
+    });
+    const attackerDb = env.authenticatedContext(attackerUid).firestore();
+    const badBatch = writeBatch(attackerDb);
+    badBatch.update(doc(attackerDb, 'students', ownRecord), {accountUid: 'hijacked'});
+    badBatch.set(doc(attackerDb, 'users', 'hijacked'), {
+      uid: 'hijacked', name: 'Fake Student', role: 'student',
+      studentId: ownRecord, studentNumber: '87654321',
+      email: 'student-87654321@khetat-alitqan.firebaseapp.com',
+      createdAt: new Date()
+    });
+    await assertFails(badBatch.commit());
+    console.log('PASS: Another teacher cannot link an account to someone else student');
 
     console.log('ALL SECURITY READ TESTS PASSED');
   } finally {
