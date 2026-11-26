@@ -66,6 +66,22 @@ function installStudentLogin(){
   catch(err){console.error(err);msg.textContent='تعذّر الدخول. تأكد من الرقم وكلمة المرور.'}
  };
 }
+// DAILY_REPORTS_V1 — stored within existing student records; existing access rules apply.
+function reportDateLocal(){const d=new Date();return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
+function scoreReport(target,done,recitation,attendance){
+ target=Number(target);done=Number(done);recitation=Number(recitation);
+ if(!Number.isFinite(target)||target<=0||!Number.isFinite(done)||done<0||!Number.isFinite(recitation)||recitation<0||recitation>20)throw Error('تحقق من الهدف والصفحات وقوة التسميع');
+ if(!['حاضر','غائب','بعذر'].includes(attendance))throw Error('حالة الحضور غير صحيحة');
+ const memorizationScore=Math.min(60,Math.round(done/target*6000)/100),attendanceScore=attendance==='حاضر'?20:0;
+ return {targetPages:target,completedPages:done,memorizationScore,recitationScore:recitation,attendanceScore,total:Math.round((memorizationScore+recitation+attendanceScore)*100)/100};
+}
+function reportWeekKey(date){const d=new Date(date+'T12:00:00');if(Number.isNaN(d.getTime()))return '';const day=(d.getDay()+1)%7;d.setDate(d.getDate()-day);return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),String(d.getDate()).padStart(2,'0')].join('-')}
+function reportPanel(records){
+ const daily=new Map();for(const r of [...records].reverse()){if(r.reportDate&&Number.isFinite(Number(r.totalScore)))daily.set(r.reportDate,r)}
+ const rows=[...daily.values()].sort((a,b)=>b.reportDate.localeCompare(a.reportDate));
+ const aggregate=(keyFn)=>{const groups=new Map();for(const r of rows){const k=keyFn(r.reportDate);if(!k)continue;const g=groups.get(k)||[];g.push(r);groups.set(k,g)}return [...groups].sort((a,b)=>b[0].localeCompare(a[0])).map(([k,rs])=>`<div class="record"><b>${esc(k)}</b> — ${Math.round(rs.reduce((a,r)=>a+Number(r.totalScore),0)/rs.length*100)/100}/100 <span class="mut">(${rs.length} أيام)</span></div>`).join('')||'<p class="mut">لا توجد تقييمات</p>'};
+ return `<div class="card"><h3>📊 التقرير اليومي</h3>${rows.map(r=>`<div class="record"><b>${esc(r.reportDate)}</b> — <b>${esc(r.totalScore)}/100</b><p>الحفظ: ${esc(r.completedPages)}/${esc(r.targetPages)} صفحات (${esc(r.memorizationScore)}/60) | التسميع: ${esc(r.recitationScore)}/20 | الحضور: ${esc(r.attendanceScore)}/20</p></div>`).join('')||'<p class="mut">لا توجد تقييمات يومية بعد</p>'}</div><div class="card"><h3>📅 التقرير الأسبوعي</h3><p class="mut">بداية الأسبوع: السبت. المتوسط لأيام التقييم فقط.</p>${aggregate(reportWeekKey)}</div><div class="card"><h3>🗓️ التقرير الشهري</h3><p class="mut">المتوسط لأيام التقييم فقط.</p>${aggregate(d=>d.slice(0,7))}</div>`;
+}
 function renderStudentHome(){
  out.style.display='inline-block';el.innerHTML='<div class="card">جارٍ تحميل سجل الطالب...</div>';
  if(!profile.studentId){el.innerHTML='<div class="card">حساب غير مرتبط بسجل</div>';return}
@@ -75,6 +91,7 @@ function renderStudentHome(){
   let html='<div class="card"><h2>🎓 '+esc(s.name)+'</h2><p>رقم الطالب: '+esc(profile.studentNumber)+'</p><p class="mut">يمكنك الاطلاع على سجلك فقط</p></div>';
   html+='<div class="card next"><h3>📌 الواجب القادم</h3>'+(last?'<p>حفظ: '+esc(last.as||'غير محدد')+' '+esc(last.af||'')+'–'+esc(last.at||'')+'</p><p>مراجعة: '+esc(last.rev||'غير محددة')+'</p>':'لا يوجد واجب بعد')+'</div>';
   html+='<div class="card"><h3>📖 سجل التسميع والتقدم</h3>'+(recs.map(r=>'<div class="record"><div class="mut">'+esc(r.date||'')+'</div><b>'+esc(r.rs||'تسميع')+'</b> '+esc(r.rf||'')+'–'+esc(r.rt||'')+'<p>الدرجة: '+esc(r.grade||'—')+'</p><p>الحضور: '+esc(r.attendance||'—')+' | الأخطاء: '+esc(r.err||'0')+'</p><p>الحفظ الجديد: '+esc(r.ns||'—')+' '+esc(r.nf||'')+'–'+esc(r.nt||'')+'</p><p>ملاحظات: '+esc(r.note||'—')+'</p></div>').join('')||'<p>لا توجد تسجيلات</p>')+'</div>';
+  html+=reportPanel(recs);
   el.innerHTML=html;
  },err=>{console.error(err);el.innerHTML='<div class="card">فشل تحميل السجل</div>'}));
 }
@@ -91,8 +108,9 @@ let h=`<div class="card"><h3>➕ إضافة طالب بالاسم</h3><form id="
 h+=`<div class="card"><h3>اختيار الطالب (${visible.length})</h3>${visible.length?`<select id="studentSelect">${visible.map(s=>`<option value="${esc(s.uid)}" ${s.uid===selected?'selected':''}>${esc(s.name)}</option>`).join('')}</select>`:'لا يوجد طلاب بعد'}</div>`;
 if(chosen){let recs=Array.isArray(chosen.records)?chosen.records:[];h+=`<div class="card"><h3>إدارة الطالب</h3><form id="editstudent"><label>اسم الطالب</label><input id="editname" value="${esc(chosen.name)}" maxlength="120" required><button class="p big">حفظ الاسم</button></form><button id="deletestudent" class="danger wide" style="margin-top:10px">حذف الطالب وسجلاته</button></div>`;
 h+=`<div class="card"><h3>🔑 حساب دخول الطالب</h3><p>الطالب المختار: ${esc(chosen.name)}</p>${chosen.accountUid?'<p>تم ربط حساب بهذا الطالب مسبقًا. لا يمكن إنشاء حساب ثانٍ.</p>':`<form id="createStudentAccount"><label>رقم الطالب (4–10 أرقام)</label><input id="studentNewNumber" inputmode="numeric" pattern="[0-9]{4,10}" required><label>كلمة المرور (8 أحرف على الأقل)</label><input id="studentNewPassword" type="password" minlength="8" required><button class="p big">إنشاء حساب دخول</button></form><p class="mut">سلّم البيانات للطالب بشكل خاص.</p>`}</div>`;
-h+=`<div class="card"><h3>📝 تسجيل التسميع والحفظ</h3><form id="addrec">${field('rs','سورة التسميع')}${field('rf','من آية','number')}${field('rt','إلى آية','number')}<label>التقدير</label><select id="gr"><option>ممتاز</option><option>جيد</option><option>يحتاج إعادة</option></select>${field('er','عدد الأخطاء','number')}${field('ns','سورة الحفظ الجديد')}${field('nf','من آية','number')}${field('nt','إلى آية','number')}${field('as','واجب الغد: السورة')}${field('af','من آية','number')}${field('at','إلى آية','number')}${field('rv','المراجعة المطلوبة')}<label>الحضور</label><select id="attendance"><option value="حاضر">حاضر</option><option value="غائب">غائب</option><option value="بعذر">بعذر</option></select>${field('note','ملاحظات')}<button class="p big">حفظ التسجيل أونلاين</button></form></div>`;
+h+=`<div class="card"><h3>📝 تسجيل التسميع والحفظ</h3><form id="addrec">${field('rs','سورة التسميع')}${field('rf','من آية','number')}${field('rt','إلى آية','number')}<label>التقدير</label><select id="gr"><option>ممتاز</option><option>جيد</option><option>يحتاج إعادة</option></select>${field('er','عدد الأخطاء','number')}${field('ns','سورة الحفظ الجديد')}${field('nf','من آية','number')}${field('nt','إلى آية','number')}${field('as','واجب الغد: السورة')}${field('af','من آية','number')}${field('at','إلى آية','number')}${field('rv','المراجعة المطلوبة')}<label>الحضور</label><select id="attendance"><option value="حاضر">حاضر</option><option value="غائب">غائب</option><option value="بعذر">بعذر</option></select>${field('note','ملاحظات')}<h3>📊 تقييم اليوم من 100</h3><label>تاريخ التقييم</label><input id="reportDate" type="date" value="${reportDateLocal()}" required><label>هدف الحفظ (عدد الصفحات)</label><input id="targetPages" type="number" min="0.01" step="0.01" required><label>الصفحات المنجزة</label><input id="completedPages" type="number" min="0" step="0.01" required><label>قوة التسميع (من 20)</label><input id="recitationScore" type="number" min="0" max="20" step="0.01" required><p class="mut">الحضور: حاضر 20، غائب أو بعذر 0. الحفظ 60، التسميع 20.</p><button class="p big">حفظ التسجيل أونلاين</button></form></div>`;
 h+=`<div class="card next"><h3>📌 الواجب القادم</h3>${recs.length?`<p>حفظ: ${esc(recs[0].as||'غير محدد')} ${esc(recs[0].af||'')}–${esc(recs[0].at||'')}</p><p>مراجعة: ${esc(recs[0].rev||'غير محددة')}</p>`:'لا يوجد واجب بعد'}</div><div class="card"><h3>سجل التقدم</h3>${recs.map(r=>`<div class="record"><div class="mut">${esc(r.date)}</div><b>${esc(r.rs||'تسميع')}</b> ${esc(r.rf||'')}–${esc(r.rt||'')} | ${esc(r.grade)}<div>الحضور: ${esc(r.attendance||'غير مسجل')} | الأخطاء: ${esc(r.err||'0')}</div><div>الحفظ الجديد: ${esc(r.ns||'—')} ${esc(r.nf||'')}–${esc(r.nt||'')}</div><div class="mut">${esc(r.note||'')}</div></div>`).join('')||'<div class="mut">لا توجد تسجيلات بعد.</div>'}</div>`}
+if(chosen)h+=reportPanel(Array.isArray(chosen.records)?chosen.records:[]);
 shell(h);
 const add=document.getElementById('addstudent');add.onsubmit=async e=>{e.preventDefault();const name=v('studentname'),teacherId=profile.role==='teacher'?user.uid:v('newteacher');if(!name||name.length>120)return note('اسم الطالب مطلوب (حتى 120 حرفًا)',true);if(!teacherId)return note('اختر المحفّظ المسؤول',true);try{const ref=await addDoc(collection(db,'students'),{name,teacherId,records:[],createdAt:serverTimestamp()});selected=ref.id;note('تمت إضافة الطالب')}catch(x){error(x)}};
 const sel=document.getElementById('studentSelect');if(sel)sel.onchange=()=>{selected=sel.value;render()};
@@ -125,7 +143,16 @@ if(accountForm)accountForm.onsubmit=async e=>{
  }
 };
 
-const f=document.getElementById('addrec');f.onsubmit=async e=>{e.preventDefault();const r={date:new Date().toLocaleDateString('ar'),rs:v('rs'),rf:v('rf'),rt:v('rt'),grade:v('gr'),err:v('er'),ns:v('ns'),nf:v('nf'),nt:v('nt'),as:v('as'),af:v('af'),at:v('at'),rev:v('rv'),attendance:v('attendance'),note:v('note')};try{await updateDoc(doc(db,'students',chosen.uid),{records:[r,...(chosen.records||[])]});note('تم حفظ التسجيل')}catch(x){error(x)}}}}
+const f=document.getElementById('addrec');f.onsubmit=async e=>{e.preventDefault();try{
+ const date=v('reportDate');if(!/^\d{4}-\d{2}-\d{2}$/.test(date)||Number.isNaN(new Date(date+'T12:00:00').getTime()))throw Error('تاريخ التقرير غير صحيح');
+ const attendance=v('attendance'),score=scoreReport(v('targetPages'),v('completedPages'),v('recitationScore'),attendance);
+ const r={date:new Date().toLocaleDateString('ar'),reportDate:date,...score,totalScore:score.total,rs:v('rs'),rf:v('rf'),rt:v('rt'),grade:v('gr'),err:v('er'),ns:v('ns'),nf:v('nf'),nt:v('nt'),as:v('as'),af:v('af'),at:v('at'),rev:v('rv'),attendance,note:v('note')};
+ const current=await getDoc(doc(db,'students',chosen.uid));if(!current.exists())throw Error('الطالب غير موجود');
+ const old=Array.isArray(current.data().records)?current.data().records:[];
+ // Keep every existing record. The latest assessment for a date is used in reports.
+ const next=[r,...old];if(next.length>500)throw Error('بلغ سجل الطالب الحد الأقصى (500 تسجيل)');
+ await updateDoc(doc(db,'students',chosen.uid),{records:next});note('تم حفظ التقييم اليومي والتقارير الأسبوعية والشهرية');
+ }catch(x){error(x)}}}}
 out.onclick=()=>signOut(auth);
 onAuthStateChanged(auth,async u=>{clearSubs();user=u;profile=null;students=[];people=[];selected='';page=u?'students':'home';if(!u)return login();el.innerHTML='<div class="card">جارٍ التحقق من الصلاحيات…</div>';try{const snap=await getDoc(doc(db,'users',u.uid));if(!snap.exists()){el.innerHTML=`<div class="card"><h3>الحساب بحاجة إلى تفعيل</h3><p>تم تسجيل الدخول، لكن لم يُنشأ ملف صلاحيات لهذا الحساب بعد.</p><div class="mut">UID: <code>${esc(u.uid)}</code></div><button id="signout">خروج</button></div>`;document.getElementById('signout').onclick=()=>signOut(auth);return}profile=snap.data();if(profile.role==='student'){renderStudentHome();return;}if(!['admin','teacher'].includes(profile.role))throw Error('هذا الإصدار مخصص للمدير والمحفّظ؛ دخول الطلاب لم يُفعّل بعد');const handleErr=x=>{console.error(x);note('فشل تحميل البيانات: '+x.message,true)};
 if(profile.role==='admin'){unsubs.push(onSnapshot(collection(db,'users'),s=>{people=s.docs.map(d=>({uid:d.id,...d.data()}));render()},handleErr));unsubs.push(onSnapshot(collection(db,'students'),s=>{students=s.docs.map(d=>({uid:d.id,...d.data()}));render()},handleErr))}
